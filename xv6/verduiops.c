@@ -5,7 +5,7 @@
 #include "fcntl.h"
 
 #define N 4096
-#define TIMES 4 
+#define TIMES 4
 
 static char path[] = "12verduiops";
 static char data[N];
@@ -40,7 +40,7 @@ main(int argc, char *argv[])
     int end = uptime();
     long elapsed = (long) end - (long) start;
 
-    printf(1, "\t\t\t\t\t%d: %d VerduIOPS\n", pid, (int) (bytes / elapsed));
+    printf(1, "\t\t\t\t\t%d: %d, %d VerduIOPS\n", pid, (int) (bytes / elapsed), elapsed);
   }
 
   exit();
