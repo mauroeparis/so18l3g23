@@ -144,7 +144,7 @@ userinit(void)
   p->tf->esp = PGSIZE;
   p->tf->eip = 0;  // beginning of initcode.S
 
-  p->priority = 1;
+  p->priority = MAX_PRIORITY_QUANTO;
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
@@ -456,6 +456,9 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+
+  if(p->priority > MAX_PRIORITY_QUANTO)
+    p->priority = p->priority >> 1;
 
   sched();
 

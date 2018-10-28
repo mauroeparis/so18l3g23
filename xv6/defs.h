@@ -170,6 +170,9 @@ void            uartinit(void);
 void            uartintr(void);
 void            uartputc(int);
 
+// utils.c
+int             pow(int, int);
+
 // vm.c
 void            seginit(void);
 void            kvmalloc(void);
