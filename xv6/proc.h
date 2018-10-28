@@ -52,10 +52,6 @@ struct proc {
   unsigned int priority;       //
 };
 
-#define PRIORITY_LEVELS 4
-#define MAX_PRIORITY_QUANTO 1
-#define MIN_PRIORITY_QUANTO pow(2, PRIORITY_LEVELS)
-
 // Process memory is laid out contiguously, low addresses first:
 //   text
 //   original data and bss

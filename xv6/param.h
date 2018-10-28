@@ -11,4 +11,5 @@
 #define LOGSIZE      (MAXOPBLOCKS*3)  // max data blocks in on-disk log
 #define NBUF         (MAXOPBLOCKS*3)  // size of disk block cache
 #define FSSIZE       1000  // size of file system in blocks
-
+#define MAX_PRIORITY_QUANTO 1  // quanto if process is in lowest queue
+#define MIN_PRIORITY_QUANTO 8  // quanto if process is in highest queue
