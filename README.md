@@ -41,3 +41,7 @@ frutaflops &
 Al proceso se le aplica un `sleep()`, pasando el estado de `RUNNING` a `SLEEPING`.
 
 ## Comparaciones.
+
+![Imgur](https://i.imgur.com/v1FvRKk.png)
+
+Como podemos ver, MLFQ es muchísmo mas óptimo.
