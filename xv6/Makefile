@@ -42,8 +42,7 @@ TOOLPREFIX := $(shell if i386-jos-elf-objdump -i 2>&1 | grep '^elf32-i386$$' >/d
 	elif objdump -i 2>&1 | grep 'elf32-i386' >/dev/null 2>&1; \
 	then echo ''; \
 	else echo "***" 1>&2; \
-	echo "*** Error: Couldn't find an	picirq.o\
- i386-*-elf version of GCC/binutils." 1>&2; \
+	echo "*** Error: Couldn't find an i386-*-elf version of GCC/binutils." 1>&2; \
 	echo "*** Is the directory with i386-jos-elf-gcc in your PATH?" 1>&2; \
 	echo "*** If your i386-*-elf toolchain is installed with a command" 1>&2; \
 	echo "*** prefix other than 'i386-jos-elf-', set your TOOLPREFIX" 1>&2; \
