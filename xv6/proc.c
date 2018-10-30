@@ -6,6 +6,14 @@
 #include "x86.h"
 #include "proc.h"
 #include "spinlock.h"
+#include "cbuffer.h"
+
+//TODO: Change define names format
+#define MAX_PRIORITY_QUANTO 1  // quanto if process is in lowest queue
+#define MIN_PRIORITY_QUANTO 4  // quanto if process is in highest queue
+
+#define MAX_PROC_Q 10u
+#define NPROCQ 3
 
 struct {
   struct spinlock lock;
@@ -20,10 +28,26 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
+struct cbuffer pqq[NPROCQ];
+struct proc *pq[NPROCQ][MAX_PROC_Q];
+
 void
 pinit(void)
 {
+  for (int i = 0; i < NPROCQ; i++)
+    cbuffer_init(&pqq[i], MAX_PROC_Q, sizeof(struct proc *), pq[i]);
   initlock(&ptable.lock, "ptable");
+}
+
+int
+priority_level(struct proc * p)
+{
+  switch (p->priority) {
+    case 4: return 2; break;
+    case 2: return 1; break;
+    case 1: return 0; break;
+    default: return -1;
+  }
 }
 
 // Must be called with interrupts disabled
@@ -38,10 +62,10 @@ struct cpu*
 mycpu(void)
 {
   int apicid, i;
-  
+
   if(readeflags()&FL_IF)
     panic("mycpu called with interrupts enabled\n");
-  
+
   apicid = lapicid();
   // APIC IDs are not guaranteed to be contiguous. Maybe we should have
   // a reverse map, or reserve a register to store &cpus[i].
@@ -81,14 +105,12 @@ allocproc(void)
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
     if(p->state == UNUSED)
       goto found;
-
   release(&ptable.lock);
   return 0;
 
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
-
   release(&ptable.lock);
 
   // Allocate kernel stack.
@@ -124,7 +146,7 @@ userinit(void)
   extern char _binary_initcode_start[], _binary_initcode_size[];
 
   p = allocproc();
-  
+
   initproc = p;
   if((p->pgdir = setupkvm()) == 0)
     panic("userinit: out of memory?");
@@ -139,6 +161,9 @@ userinit(void)
   p->tf->esp = PGSIZE;
   p->tf->eip = 0;  // beginning of initcode.S
 
+  p->priority = MAX_PRIORITY_QUANTO;
+  p->quanto = 0;
+
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
@@ -148,7 +173,8 @@ userinit(void)
   // because the assignment might not be atomic.
   acquire(&ptable.lock);
 
-  p->state = RUNNABLE;
+  p->state = RUNNABLE; //
+  cbuffer_write(&pqq[0], &p);
 
   release(&ptable.lock);
 }
@@ -200,6 +226,10 @@ fork(void)
   np->parent = curproc;
   *np->tf = *curproc->tf;
 
+  // Same piority and quanto as the parent
+  np->priority = curproc->priority;
+  np->quanto = curproc->quanto;
+
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
 
@@ -210,11 +240,13 @@ fork(void)
 
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
 
+
   pid = np->pid;
 
   acquire(&ptable.lock);
 
-  np->state = RUNNABLE;
+  np->state = RUNNABLE; //
+  cbuffer_write(&pqq[priority_level(np)], &np);
 
   release(&ptable.lock);
 
@@ -275,8 +307,9 @@ wait(void)
   struct proc *p;
   int havekids, pid;
   struct proc *curproc = myproc();
-  
+
   acquire(&ptable.lock);
+
   for(;;){
     // Scan through table looking for exited children.
     havekids = 0;
@@ -325,30 +358,34 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
+
   for(;;){
     // Enable interrupts on this processor.
     sti();
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
+    int q = 0;
+    while(q < NPROCQ) {
+      if(cbuffer_is_empty(&pqq[q])) q++;
+      else {
+        cbuffer_read(&pqq[q], &p);
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+        // Switch to chosen process.  It is the process's job
+        // to release ptable.lock and then reacquire it
+        // before jumping back to us.
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
 
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
+        break;
+      }
     }
     release(&ptable.lock);
 
@@ -385,9 +422,22 @@ sched(void)
 void
 yield(void)
 {
+  struct proc * p;
   acquire(&ptable.lock);  //DOC: yieldlock
-  myproc()->state = RUNNABLE;
-  sched();
+
+  p = myproc();
+  
+  p->quanto = (p->quanto + 1) % p->priority;
+
+  if(p->quanto == 0){
+    if(p->priority < MIN_PRIORITY_QUANTO)
+      p->priority = p->priority << 1;
+
+    p->state = RUNNABLE; //
+    cbuffer_write(&pqq[priority_level(p)], &p);
+
+    sched();
+  }
   release(&ptable.lock);
 }
 
@@ -418,7 +468,7 @@ void
 sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
-  
+
   if(p == 0)
     panic("sleep");
 
@@ -438,6 +488,10 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+  p->quanto = 0;
+
+  if(p->priority > MAX_PRIORITY_QUANTO)
+    p->priority = p->priority >> 1;
 
   sched();
 
@@ -460,8 +514,10 @@ wakeup1(void *chan)
   struct proc *p;
 
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if(p->state == SLEEPING && p->chan == chan)
-      p->state = RUNNABLE;
+    if(p->state == SLEEPING && p->chan == chan) {
+      p->state = RUNNABLE; //
+      cbuffer_write(&pqq[priority_level(p)], &p);
+    }
 }
 
 // Wake up all processes sleeping on chan.
@@ -486,8 +542,10 @@ kill(int pid)
     if(p->pid == pid){
       p->killed = 1;
       // Wake process from sleep if necessary.
-      if(p->state == SLEEPING)
-        p->state = RUNNABLE;
+      if(p->state == SLEEPING) {
+        p->state = RUNNABLE; //
+        cbuffer_write(&pqq[priority_level(p)], &p);
+      }
       release(&ptable.lock);
       return 0;
     }
@@ -523,7 +581,7 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %s %s", p->pid, state, p->name);
+    cprintf("%d %d %s %s", p->pid, priority_level(p), state, p->name);
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)

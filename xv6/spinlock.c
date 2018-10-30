@@ -25,9 +25,11 @@ void
 acquire(struct spinlock *lk)
 {
   pushcli(); // disable interrupts to avoid deadlock.
-  if(holding(lk))
+  if(holding(lk)) {
+    cprintf(lk->name);
+    cprintf("\n");
     panic("acquire");
-
+  }
   // The xchg is atomic.
   while(xchg(&lk->locked, 1) != 0)
     ;
@@ -123,4 +125,3 @@ popcli(void)
   if(mycpu()->ncli == 0 && mycpu()->intena)
     sti();
 }
-

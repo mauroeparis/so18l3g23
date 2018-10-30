@@ -48,14 +48,14 @@ main(int argc, char *argv[])
       beta = -beta;
       ops += 3 * N * N * N;
       end = uptime();
+      // printf(1, "%d: %d\n", start, end);
     } while (end <= start);
     elapsed = end - start;
 
-    printf(1, "%d: %d FrutaFLOPS\n", pid, ops / elapsed);
+    printf(1, "%d: %d, %d FrutaFLOPS\n", pid, ops / elapsed, elapsed);
   }
 
   printf(1, "%x\n", c[0][0]);
   exit();
   return 0;
 }
-
