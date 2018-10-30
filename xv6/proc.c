@@ -388,7 +388,8 @@ scheduler(void)
       }
     }
     release(&ptable.lock);
-
+    sti();
+    hlt();
   }
 }
 
@@ -426,7 +427,7 @@ yield(void)
   acquire(&ptable.lock);  //DOC: yieldlock
 
   p = myproc();
-  
+
   p->quanto = (p->quanto + 1) % p->priority;
 
   if(p->quanto == 0){
