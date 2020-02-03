@@ -2,9 +2,10 @@
 #include "stat.h"
 #include "user.h"
 
+
 int
-main()
+main(int argc, char *argv[])
 {
-  printf(1, " %d\n", uptime());
+  printf(1, "Uptime: %d\n", uptime());
   exit();
 }

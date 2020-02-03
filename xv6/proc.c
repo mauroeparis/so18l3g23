@@ -8,7 +8,12 @@
 #include "spinlock.h"
 #include "cbuffer.h"
 
+//TODO: Change define names format
+#define MAX_PRIORITY_QUANTO 1  // quanto if process is in lowest queue
+#define MIN_PRIORITY_QUANTO 4  // quanto if process is in highest queue
+
 #define MAX_PROC_Q 10u
+#define NPROCQ 3
 
 struct {
   struct spinlock lock;
@@ -23,14 +28,26 @@ extern void trapret(void);
 
 static void wakeup1(void *chan);
 
-struct cbuffer pqueue;
-struct proc *pq[MAX_PROC_Q];
+struct cbuffer pqq[NPROCQ];
+struct proc *pq[NPROCQ][MAX_PROC_Q];
 
 void
 pinit(void)
 {
-  cbuffer_init(&pqueue, MAX_PROC_Q, sizeof(struct proc *), pq);
+  for (int i = 0; i < NPROCQ; i++)
+    cbuffer_init(&pqq[i], MAX_PROC_Q, sizeof(struct proc *), pq[i]);
   initlock(&ptable.lock, "ptable");
+}
+
+int
+priority_level(struct proc * p)
+{
+  switch (p->priority) {
+    case 4: return 2; break;
+    case 2: return 1; break;
+    case 1: return 0; break;
+    default: return -1;
+  }
 }
 
 // Must be called with interrupts disabled
@@ -145,6 +162,7 @@ userinit(void)
   p->tf->eip = 0;  // beginning of initcode.S
 
   p->priority = MAX_PRIORITY_QUANTO;
+  p->quanto = 0;
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
@@ -156,7 +174,7 @@ userinit(void)
   acquire(&ptable.lock);
 
   p->state = RUNNABLE; //
-  cbuffer_write(&pqueue, &p);
+  cbuffer_write(&pqq[0], &p);
 
   release(&ptable.lock);
 }
@@ -208,7 +226,9 @@ fork(void)
   np->parent = curproc;
   *np->tf = *curproc->tf;
 
+  // Same piority and quanto as the parent
   np->priority = curproc->priority;
+  np->quanto = curproc->quanto;
 
   // Clear %eax so that fork returns 0 in the child.
   np->tf->eax = 0;
@@ -226,7 +246,7 @@ fork(void)
   acquire(&ptable.lock);
 
   np->state = RUNNABLE; //
-  cbuffer_write(&pqueue, &np);
+  cbuffer_write(&pqq[priority_level(np)], &np);
 
   release(&ptable.lock);
 
@@ -345,26 +365,31 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
+    int q = 0;
+    while(q < NPROCQ) {
+      if(cbuffer_is_empty(&pqq[q])) q++;
+      else {
+        cbuffer_read(&pqq[q], &p);
 
-    if(!cbuffer_is_empty(&pqueue)) {
-      cbuffer_read(&pqueue, &p);
+        // Switch to chosen process.  It is the process's job
+        // to release ptable.lock and then reacquire it
+        // before jumping back to us.
+        c->proc = p;
+        switchuvm(p);
+        p->state = RUNNING;
 
-      // Switch to chosen process.  It is the process's job
-      // to release ptable.lock and then reacquire it
-      // before jumping back to us.
-      c->proc = p;
-      switchuvm(p);
-      p->state = RUNNING;
+        swtch(&(c->scheduler), p->context);
+        switchkvm();
 
-      swtch(&(c->scheduler), p->context);
-      switchkvm();
-
-      // Process is done running for now.
-      // It should have changed its p->state before coming back.
-      c->proc = 0;
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        c->proc = 0;
+        break;
+      }
     }
     release(&ptable.lock);
-
+    sti();
+    hlt();
   }
 }
 
@@ -399,13 +424,21 @@ void
 yield(void)
 {
   struct proc * p;
-
   acquire(&ptable.lock);  //DOC: yieldlock
-  p = myproc();
-  p->state = RUNNABLE; //
-  cbuffer_write(&pqueue, &p);
-  sched();
 
+  p = myproc();
+
+  p->quanto = (p->quanto + 1) % p->priority;
+
+  if(p->quanto == 0){
+    if(p->priority < MIN_PRIORITY_QUANTO)
+      p->priority = p->priority << 1;
+
+    p->state = RUNNABLE; //
+    cbuffer_write(&pqq[priority_level(p)], &p);
+
+    sched();
+  }
   release(&ptable.lock);
 }
 
@@ -456,6 +489,7 @@ sleep(void *chan, struct spinlock *lk)
   // Go to sleep.
   p->chan = chan;
   p->state = SLEEPING;
+  p->quanto = 0;
 
   if(p->priority > MAX_PRIORITY_QUANTO)
     p->priority = p->priority >> 1;
@@ -483,7 +517,7 @@ wakeup1(void *chan)
   for(p = ptable.proc; p < &ptable.proc[NPROC]; p++)
     if(p->state == SLEEPING && p->chan == chan) {
       p->state = RUNNABLE; //
-      cbuffer_write(&pqueue, &p);
+      cbuffer_write(&pqq[priority_level(p)], &p);
     }
 }
 
@@ -511,7 +545,7 @@ kill(int pid)
       // Wake process from sleep if necessary.
       if(p->state == SLEEPING) {
         p->state = RUNNABLE; //
-        cbuffer_write(&pqueue, &p);
+        cbuffer_write(&pqq[priority_level(p)], &p);
       }
       release(&ptable.lock);
       return 0;
@@ -548,7 +582,7 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
-    cprintf("%d %d %s %s", p->pid, p->priority,state, p->name);
+    cprintf("%d %d %s %s", p->pid, priority_level(p), state, p->name);
     if(p->state == SLEEPING){
       getcallerpcs((uint*)p->context->ebp+2, pc);
       for(i=0; i<10 && pc[i] != 0; i++)
